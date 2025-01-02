@@ -45,21 +45,30 @@ type instruction struct {
 	args  string
 }
 
-type typeSection struct{}
+type typeSection struct {
+	moduleSection uint8  // セクションID
+	size          uint8  // サイズ
+	moduleType    uint8  // タイプ
+	argsNum       uint8  // 引数の数
+	args          []byte // 引数
+	result        []byte // 戻り値
+}
 
-type functionSection struct{}
+type functionSection struct {
+	sectionID uint8 // セクションID
+	size      uint8 // サイズ
+	num       uint8 // 関数の数
+}
 
 type exportSection struct{}
 
 type codeSection struct{}
 
 type WasmModule struct {
-	moduleSection  uint8
-	moduleType     uint8
-	funcName       string
-	paramNum       uint8
-	param          []byte
-	result         []byte
+	typeSection     typeSection
+	funcName        string
+	functionSection functionSection
+
 	instructionSet []instruction
 }
 
@@ -100,7 +109,7 @@ func setParams(lines []string) ([]byte, uint8) {
 	return params, cnt
 }
 
-func readFuncDefinition(wasmFunction *WasmModule, tokens string) {
+func setTypeSection(wasmFunction *WasmModule, tokens string) {
 	splitTokens := strings.Split(tokens, ")")
 
 	for _, token := range splitTokens {
@@ -111,12 +120,23 @@ func readFuncDefinition(wasmFunction *WasmModule, tokens string) {
 			wasmFunction.funcName = strings.Replace(splitSpace[(len(splitSpace)-1)], "\"", "", -1)
 		case strings.Contains(token, "param"):
 			// 引数をセットする
-			wasmFunction.param, wasmFunction.paramNum = setParams(splitSpace)
+			wasmFunction.typeSection.args, wasmFunction.typeSection.argsNum = setParams(splitSpace)
 		case strings.Contains(token, "result"):
 			// 戻り値をセットする
-			wasmFunction.result, _ = setParams(splitSpace)
+			wasmFunction.typeSection.result, _ = setParams(splitSpace)
 		}
 	}
+}
+
+func setFunctionSection(wasmFunction *WasmModule) {
+	switch wasmFunction.typeSection.moduleType {
+	case function:
+		wasmFunction.functionSection.sectionID = functionSectionNum
+	}
+	// サイズは決め打ちで2
+	wasmFunction.functionSection.size = 2
+	// Indexは決め打ちで0
+	wasmFunction.functionSection.num = 0
 }
 
 func readInstructions(wasmFunction *WasmModule, tokens string) {
@@ -157,9 +177,10 @@ func readWatFile(path string) WasmModule {
 				// 関数型以外のモジュールもあるが今はこれだけ対応
 				switch {
 				case strings.HasPrefix(token, "(func"):
-					wasmmodule.moduleSection = typeSectionNum
-					wasmmodule.moduleType = function
-					readFuncDefinition(&wasmmodule, token)
+					wasmmodule.typeSection.moduleSection = typeSectionNum
+					wasmmodule.typeSection.moduleType = function
+					setTypeSection(&wasmmodule, token)
+					setFunctionSection(&wasmmodule)
 				}
 			}
 		}
@@ -180,20 +201,24 @@ func createWasmBinary(wasmmodule WasmModule) {
 	bin = append(bin, magicNumber...)
 	bin = append(bin, version...)
 	// セクションID
-	bin = append(bin, wasmmodule.moduleSection)
+	bin = append(bin, wasmmodule.typeSection.moduleSection)
 	// サイズ
 	bin = append(bin, 0x07)
 	bin = append(bin, 0x01)
 	// タイプ
-	bin = append(bin, wasmmodule.moduleType)
+	bin = append(bin, wasmmodule.typeSection.moduleType)
 	// 引数の数
-	bin = append(bin, wasmmodule.paramNum)
+	bin = append(bin, wasmmodule.typeSection.argsNum)
 	// 引数の型
-	bin = append(bin, wasmmodule.param...)
+	bin = append(bin, wasmmodule.typeSection.args...)
 	// 戻り値の数は1つ
 	bin = append(bin, 0x01)
 	// 戻り値の型
-	bin = append(bin, wasmmodule.result...)
+	bin = append(bin, wasmmodule.typeSection.result...)
+
+	bin = append(bin, wasmmodule.functionSection.sectionID)
+	bin = append(bin, wasmmodule.functionSection.size)
+	bin = append(bin, wasmmodule.functionSection.num)
 
 	printBytes(bin)
 }
