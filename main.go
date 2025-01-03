@@ -112,6 +112,7 @@ type functionSection struct {
 	sectionID   uint8 // セクションID
 	sectionSize uint8 // サイズ
 	num         uint8 // 関数の数
+	index       uint8 // 関数が参照する型インデックス（0番目の型を参照）
 }
 
 func (f *functionSection) toByte() []byte {
@@ -119,6 +120,7 @@ func (f *functionSection) toByte() []byte {
 	b = append(b, f.sectionID)
 	b = append(b, f.sectionSize)
 	b = append(b, f.num)
+	b = append(b, f.index)
 	return b
 }
 
@@ -225,8 +227,10 @@ func setFunctionSection(wasmFunction *WasmModule) {
 	}
 	// サイズは決め打ちで2
 	wasmFunction.functionSection.sectionSize = 2
-	// Indexは決め打ちで0
-	wasmFunction.functionSection.num = 0
+	// 関数の数は決め打ちで1
+	wasmFunction.functionSection.num = 1
+	// 関数の数は1つなので参照するIndexは0
+	wasmFunction.functionSection.index = 0
 }
 
 func setExportSection(modtype uint8, export *exportSection, funcName []byte) {
@@ -337,10 +341,10 @@ func createWasmBinary(wasmmodule WasmModule) {
 	// Functionセクションをセット
 	bin = append(bin, wasmmodule.functionSection.toByte()...)
 	// Exportセクションをセット
-	//bin = append(bin, wasmmodule.exportSection.toByte()...)
-	printBytes(bin)
-	printBytes(wasmmodule.exportSection.toByte())
-	printBytes(wasmmodule.codeSection.toByte())
+	bin = append(bin, wasmmodule.exportSection.toByte()...)
+	// Codeセクションをセット
+	bin = append(bin, wasmmodule.codeSection.toByte()...)
+	fmt.Printf("%x\n", bin)
 }
 
 func main() {
