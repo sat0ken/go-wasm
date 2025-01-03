@@ -5,19 +5,33 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 )
 
 const (
-	// module type
-	function = 0x60
+	// バイナリ識別子のまとめ
+	// https://webassembly.github.io/spec/core/binary/types.html#types
 
-	// https://webassembly.github.io/spec/core/binary/types.html#number-types
 	// Number Types
 	numberTypeI32 = 0x7f
 	numberTypeI64 = 0x7e
 	numberTypeF32 = 0x7d
 	numberTypeF64 = 0x7b
+
+	// Vector Types
+	vecType = 0x7b
+
+	// Reference Type
+	refTypeFuncRef   = 0x70
+	refTypeExternRef = 0x6f
+
+	// Global Type
+	globalTypeConst = 0x00
+	globalTypeVar   = 0x01
+
+	// Function Types
+	function = 0x60
 )
 
 const (
@@ -37,8 +51,32 @@ const (
 	dataCountSectionNum
 )
 
+const (
+	// https://webassembly.github.io/spec/core/binary/instructions.html#instructions
+	// Instructionsのまとめ
+
+	// Variable Instructions
+	localGet  = 0x20
+	localSet  = 0x21
+	localTee  = 0x22
+	globalGet = 0x23
+	globalSet = 0x24
+
+	// Numeric Instructionsはもっといっぱいあるけど省略
+	i32Add = 0x6a
+)
+
 var magicNumber = []byte{0x00, 0x61, 0x73, 0x6D} // "\0asm"
 var version = []byte{0x01, 0x00, 0x00, 0x00}     // version
+
+type WasmModule struct {
+	typeSection     typeSection
+	funcName        []byte
+	functionSection functionSection
+	exportSection   exportSection
+	instructionSet  []instruction
+	codeSection     codeSection
+}
 
 type instruction struct {
 	order string
@@ -47,29 +85,81 @@ type instruction struct {
 
 type typeSection struct {
 	moduleSection uint8  // セクションID
-	size          uint8  // サイズ
+	sectionSize   uint8  // サイズ
 	moduleType    uint8  // タイプ
 	argsNum       uint8  // 引数の数
-	args          []byte // 引数
+	args          []byte // 引数の型
 	result        []byte // 戻り値
 }
 
-type functionSection struct {
-	sectionID uint8 // セクションID
-	size      uint8 // サイズ
-	num       uint8 // 関数の数
+func (t *typeSection) toByte() []byte {
+	var b []byte
+	b = append(b, t.moduleSection)
+	// セクションサイズ
+	b = append(b, 0x07)
+	// 型の数（1つの関数型を定義）
+	b = append(b, 0x01)
+	b = append(b, t.moduleType)
+	b = append(b, t.argsNum)
+	b = append(b, t.args...)
+	// 戻り値の数は1つ
+	b = append(b, 0x01)
+	b = append(b, t.result...)
+	return b
 }
 
-type exportSection struct{}
+type functionSection struct {
+	sectionID   uint8 // セクションID
+	sectionSize uint8 // サイズ
+	num         uint8 // 関数の数
+}
 
-type codeSection struct{}
+func (f *functionSection) toByte() []byte {
+	var b []byte
+	b = append(b, f.sectionID)
+	b = append(b, f.sectionSize)
+	b = append(b, f.num)
+	return b
+}
 
-type WasmModule struct {
-	typeSection     typeSection
-	funcName        string
-	functionSection functionSection
+type exportSection struct {
+	sectionID   uint8  // セクションID
+	sectionSize uint8  // サイズ
+	exportNum   uint8  // エクスポートの数
+	nameLength  uint8  // 名前の長さ
+	name        []byte // 名前
+	exportType  uint8  // エクスポートの種類
+	index       uint8  // 関数のインデックス(0番目なら0が入る)
+}
 
-	instructionSet []instruction
+func (e *exportSection) toByte() []byte {
+	var b []byte
+	b = append(b, e.sectionID)
+	b = append(b, e.sectionSize)
+	b = append(b, e.exportNum)
+	b = append(b, e.nameLength)
+	b = append(b, e.name...)
+	b = append(b, e.exportType)
+	b = append(b, e.index)
+	return b
+}
+
+type codeSection struct {
+	sectionID   uint8
+	sectionSize uint8
+	funcNum     uint8
+	codeSize    uint8
+	code        []byte
+}
+
+func (c *codeSection) toByte() []byte {
+	var b []byte
+	b = append(b, c.sectionID)
+	b = append(b, c.sectionSize)
+	b = append(b, c.funcNum)
+	b = append(b, c.codeSize)
+	b = append(b, c.code...)
+	return b
 }
 
 func strToType(str string) int {
@@ -117,7 +207,7 @@ func setTypeSection(wasmFunction *WasmModule, tokens string) {
 		switch {
 		case strings.Contains(token, "export"):
 			// 関数名をセットする
-			wasmFunction.funcName = strings.Replace(splitSpace[(len(splitSpace)-1)], "\"", "", -1)
+			wasmFunction.funcName = []byte(strings.Replace(splitSpace[(len(splitSpace)-1)], "\"", "", -1))
 		case strings.Contains(token, "param"):
 			// 引数をセットする
 			wasmFunction.typeSection.args, wasmFunction.typeSection.argsNum = setParams(splitSpace)
@@ -134,9 +224,48 @@ func setFunctionSection(wasmFunction *WasmModule) {
 		wasmFunction.functionSection.sectionID = functionSectionNum
 	}
 	// サイズは決め打ちで2
-	wasmFunction.functionSection.size = 2
+	wasmFunction.functionSection.sectionSize = 2
 	// Indexは決め打ちで0
 	wasmFunction.functionSection.num = 0
+}
+
+func setExportSection(modtype uint8, export *exportSection, funcName []byte) {
+	export.sectionID = exportSectionNum
+	export.sectionSize = uint8(4 + len(funcName))
+	export.exportNum = 1
+	export.nameLength = uint8(len(funcName))
+	export.name = funcName
+
+	// functionだけ対応,本当は後tableとmemoryとglobalもある
+	// https://webassembly.github.io/spec/core/binary/modules.html#export-section
+	switch modtype {
+	case function:
+		export.exportType = 0
+	}
+	// 0番目の関数をエクスポートで決め打ち
+	export.index = 0
+}
+
+func setCodeSection(instructions []instruction, codeSection *codeSection) {
+	// codeを生成する
+	codeSection.code = append(codeSection.code, 0) // ローカル変数の数は0
+	for _, inst := range instructions {
+		switch {
+		case strings.EqualFold(inst.order, "local.get"):
+			codeSection.code = append(codeSection.code, localGet)
+			args, _ := strconv.ParseInt(inst.args, 10, 64)
+			codeSection.code = append(codeSection.code, byte(args))
+		case strings.EqualFold(inst.order, "i32.add"):
+			codeSection.code = append(codeSection.code, i32Add)
+		}
+	}
+	// 関数の終了を入れる
+	codeSection.code = append(codeSection.code, 0x0b)
+	// 関数コードのサイズをセット
+	codeSection.codeSize = uint8(len(codeSection.code))
+	codeSection.sectionID = 0x0a
+	codeSection.sectionSize = 2 + codeSection.codeSize
+	codeSection.funcNum = 1
 }
 
 func readInstructions(wasmFunction *WasmModule, tokens string) {
@@ -181,6 +310,7 @@ func readWatFile(path string) WasmModule {
 					wasmmodule.typeSection.moduleType = function
 					setTypeSection(&wasmmodule, token)
 					setFunctionSection(&wasmmodule)
+					setExportSection(wasmmodule.typeSection.moduleType, &wasmmodule.exportSection, wasmmodule.funcName)
 				}
 			}
 		}
@@ -192,35 +322,25 @@ func readWatFile(path string) WasmModule {
 		}
 		cnt++
 	}
-
+	setCodeSection(wasmmodule.instructionSet, &wasmmodule.codeSection)
 	return wasmmodule
 }
 
 func createWasmBinary(wasmmodule WasmModule) {
 	var bin []byte
+	// Magic Numberをセット
 	bin = append(bin, magicNumber...)
+	// Versionをセット
 	bin = append(bin, version...)
-	// セクションID
-	bin = append(bin, wasmmodule.typeSection.moduleSection)
-	// サイズ
-	bin = append(bin, 0x07)
-	bin = append(bin, 0x01)
-	// タイプ
-	bin = append(bin, wasmmodule.typeSection.moduleType)
-	// 引数の数
-	bin = append(bin, wasmmodule.typeSection.argsNum)
-	// 引数の型
-	bin = append(bin, wasmmodule.typeSection.args...)
-	// 戻り値の数は1つ
-	bin = append(bin, 0x01)
-	// 戻り値の型
-	bin = append(bin, wasmmodule.typeSection.result...)
-
-	bin = append(bin, wasmmodule.functionSection.sectionID)
-	bin = append(bin, wasmmodule.functionSection.size)
-	bin = append(bin, wasmmodule.functionSection.num)
-
+	// Typeセクションをセット
+	bin = append(bin, wasmmodule.typeSection.toByte()...)
+	// Functionセクションをセット
+	bin = append(bin, wasmmodule.functionSection.toByte()...)
+	// Exportセクションをセット
+	//bin = append(bin, wasmmodule.exportSection.toByte()...)
 	printBytes(bin)
+	printBytes(wasmmodule.exportSection.toByte())
+	printBytes(wasmmodule.codeSection.toByte())
 }
 
 func main() {
