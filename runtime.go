@@ -33,10 +33,24 @@ func executeCodeSection(sectionData []byte) error {
 	return nil
 }
 
+func applyBinaryOperation(stack *Stack, operation func(a, b int32) int32) error {
+	b, err := stack.Pop()
+	if err != nil {
+		return err
+	}
+	a, err := stack.Pop()
+	if err != nil {
+		return err
+	}
+	result := operation(a, b)
+	stack.Push(result)
+	return nil
+}
+
 func executeFunctionBody(body []byte) error {
 	stack := &Stack{}
-	stack.Push(10)
 	stack.Push(20)
+	stack.Push(10)
 
 	reader := bytes.NewReader(body)
 
@@ -48,16 +62,37 @@ func executeFunctionBody(body []byte) error {
 
 		switch opcode {
 		case i32Add:
-			b, err := stack.Pop()
+			err := applyBinaryOperation(stack, func(a, b int32) int32 {
+				fmt.Printf("Executed i32.add: %d + %d = %d\n", a, b, a+b)
+				return a + b
+			})
 			if err != nil {
 				return err
 			}
-			a, err := stack.Pop()
+		case i32Sub:
+			err := applyBinaryOperation(stack, func(a, b int32) int32 {
+				fmt.Printf("Executed i32.sub: %d - %d = %d\n", a, b, a-b)
+				return a - b
+			})
 			if err != nil {
 				return err
 			}
-			stack.Push(a + b)
-			fmt.Printf("Executed i32.add: %d + %d = %d\n", a, b, a+b)
+		case i32Mul:
+			err := applyBinaryOperation(stack, func(a, b int32) int32 {
+				fmt.Printf("Executed i32.mul: %d * %d = %d\n", a, b, a*b)
+				return a * b
+			})
+			if err != nil {
+				return err
+			}
+		case i32Divs:
+			err := applyBinaryOperation(stack, func(a, b int32) int32 {
+				fmt.Printf("Executed i32.mul: %d * %d = %d\n", a, b, a/b)
+				return a / b
+			})
+			if err != nil {
+				return err
+			}
 			//default:
 			//	fmt.Printf("Unsupported opcode: 0x%x\n", opcode)
 		}

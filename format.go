@@ -98,6 +98,12 @@ func setCodeSection(instructions []instruction, codeSection *codeSection) {
 			codeSection.code = append(codeSection.code, byte(args))
 		case strings.EqualFold(inst.order, "i32.add"):
 			codeSection.code = append(codeSection.code, i32Add)
+		case strings.EqualFold(inst.order, "i32.sub"):
+			codeSection.code = append(codeSection.code, i32Sub)
+		case strings.EqualFold(inst.order, "i32.mul"):
+			codeSection.code = append(codeSection.code, i32Mul)
+		case strings.EqualFold(inst.order, "i32.div_s"):
+			codeSection.code = append(codeSection.code, i32Divs)
 		}
 	}
 	// 関数の終了を入れる

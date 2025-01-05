@@ -54,7 +54,11 @@ const (
 	globalSet = 0x24
 
 	// Numeric Instructionsはもっといっぱいあるけど省略
-	i32Add = 0x6a
+	i32Add  = 0x6a // 足し算
+	i32Sub  = 0x6b // 引き算
+	i32Mul  = 0x6c // 掛け算
+	i32Divs = 0x6d // 割り算
+
 )
 
 var magicNumber = []byte{0x00, 0x61, 0x73, 0x6D} // "\0asm"
