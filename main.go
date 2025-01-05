@@ -2,6 +2,8 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -179,14 +181,21 @@ func strToType(str string) int {
 	}
 }
 
-func printBytes(data []byte) {
-	for i, b := range data {
-		if i > 0 {
-			fmt.Print(" ")
-		}
-		fmt.Printf("%02x", b)
+type Stack struct {
+	data []int32
+}
+
+func (s *Stack) Push(value int32) {
+	s.data = append(s.data, value)
+}
+
+func (s *Stack) Pop() (int32, error) {
+	if len(s.data) == 0 {
+		return 0, errors.New("stack underflow")
 	}
-	fmt.Println()
+	value := s.data[len(s.data)-1]
+	s.data = s.data[:len(s.data)-1]
+	return value, nil
 }
 
 func setParams(lines []string) ([]byte, uint8) {
@@ -330,7 +339,7 @@ func readWatFile(path string) WasmModule {
 	return wasmmodule
 }
 
-func createWasmBinary(wasmmodule WasmModule) {
+func createWasmBinary(wasmmodule WasmModule) []byte {
 	var bin []byte
 	// Magic Numberをセット
 	bin = append(bin, magicNumber...)
@@ -344,9 +353,139 @@ func createWasmBinary(wasmmodule WasmModule) {
 	bin = append(bin, wasmmodule.exportSection.toByte()...)
 	// Codeセクションをセット
 	bin = append(bin, wasmmodule.codeSection.toByte()...)
-	fmt.Printf("%x\n", bin)
+	return bin
+}
+
+func readULEB128(reader *bytes.Reader) (uint32, error) {
+	var result uint32
+	var shift uint
+	for {
+		b, err := reader.ReadByte()
+		if err != nil {
+			return 0, err
+		}
+		result |= uint32(b&0x7F) << shift
+		if b&0x80 == 0 {
+			break
+		}
+		shift += 7
+	}
+	return result, nil
+}
+
+func validateWASMHeader(data []byte) error {
+	if len(data) < 8 {
+		return errors.New("file too small to be a valid WASM")
+	}
+	if bytes.Equal(data[:4], magicNumber) == false {
+		return fmt.Errorf("invalid magic number: 0x%x", data[:4])
+	}
+	if bytes.Equal(data[4:8], version) == false {
+		return fmt.Errorf("unsupported version: 0x%x", data[4:8])
+	}
+	return nil
+}
+
+func parseWASMCodeSection(wasmData []byte) error {
+	reader := bytes.NewReader(wasmData[8:]) // Skip magic number and version
+
+	for reader.Len() > 0 {
+		sectionID, err := reader.ReadByte()
+		if err != nil {
+			return fmt.Errorf("failed to read section ID: %w", err)
+		}
+
+		sectionSize, err := readULEB128(reader)
+		if err != nil {
+			return fmt.Errorf("failed to read section size: %w", err)
+		}
+
+		sectionData := make([]byte, sectionSize)
+		if _, err := reader.Read(sectionData); err != nil {
+			return fmt.Errorf("failed to read section data: %w", err)
+		}
+
+		if sectionID == codeSectionNum {
+			return executeCodeSection(sectionData)
+		}
+	}
+
+	return errors.New("code section not found")
+}
+
+func executeCodeSection(sectionData []byte) error {
+	reader := bytes.NewReader(sectionData)
+
+	funcCount, err := readULEB128(reader)
+	if err != nil {
+		return fmt.Errorf("failed to read function count: %w", err)
+	}
+
+	for i := uint32(0); i < funcCount; i++ {
+		bodySize, err := readULEB128(reader)
+		if err != nil {
+			return fmt.Errorf("failed to read function body size: %w", err)
+		}
+
+		body := make([]byte, bodySize)
+		if _, err := reader.Read(body); err != nil {
+			return fmt.Errorf("failed to read function body: %w", err)
+		}
+
+		err = executeFunctionBody(body)
+		if err != nil {
+			return fmt.Errorf("failed to execute function body: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func executeFunctionBody(body []byte) error {
+	stack := &Stack{}
+	stack.Push(10)
+	stack.Push(20)
+
+	reader := bytes.NewReader(body)
+
+	for reader.Len() > 0 {
+		opcode, err := reader.ReadByte()
+		if err != nil {
+			return fmt.Errorf("failed to read opcode: %w", err)
+		}
+
+		switch opcode {
+		case i32Add:
+			b, err := stack.Pop()
+			if err != nil {
+				return err
+			}
+			a, err := stack.Pop()
+			if err != nil {
+				return err
+			}
+			stack.Push(a + b)
+			fmt.Printf("Executed i32.add: %d + %d = %d\n", a, b, a+b)
+			//default:
+			//	fmt.Printf("Unsupported opcode: 0x%x\n", opcode)
+		}
+	}
+	fmt.Println("After execution, stack:", stack.data)
+
+	return nil
 }
 
 func main() {
-	createWasmBinary(readWatFile("./add.wat"))
+	wasmbin := createWasmBinary(readWatFile("./add.wat"))
+	err := validateWASMHeader(wasmbin)
+	if err != nil {
+		fmt.Println("Error:", err)
+		os.Exit(1)
+	}
+
+	err = parseWASMCodeSection(wasmbin)
+	if err != nil {
+		fmt.Println("Error:", err)
+		os.Exit(1)
+	}
 }
